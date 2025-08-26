@@ -15,7 +15,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copia o código
-COPY pec_app/ ./pec_app/
+COPY . .
 
 # Usuário não-root + diretório de dados (opcional, não usado p/ PG)
 RUN adduser --disabled-password --gecos "" appuser \
@@ -28,5 +28,5 @@ EXPOSE 8000
 # Vars padrão (podem ser sobrescritas no compose/.env)
 ENV RUN_AT=07:00
 
-WORKDIR /app/pec_app
+WORKDIR /app
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
