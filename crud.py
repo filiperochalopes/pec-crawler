@@ -25,6 +25,12 @@ async def get_last_version(session: AsyncSession) -> Optional[PecVersion]:
     return res.scalar_one_or_none()
 
 
+async def get_version(session: AsyncSession, version: str) -> Optional[PecVersion]:
+    stmt = select(PecVersion).where(PecVersion.version == version).limit(1)
+    res = await session.execute(stmt)
+    return res.scalar_one_or_none()
+
+
 async def list_versions(session: AsyncSession, limit: int = 20):
     stmt = select(PecVersion).order_by(PecVersion.id.desc()).limit(limit)
     res = await session.execute(stmt)
