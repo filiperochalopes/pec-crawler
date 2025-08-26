@@ -4,10 +4,10 @@ from apscheduler.triggers.cron import CronTrigger
 from zoneinfo import ZoneInfo
 
 from env import settings
-from helpers import run_pec_crawler, now_iso, parse_time_hhmm
+from helpers import run_pec_crawler, now_iso, parse_time_hhmm, summarize_release_notes
 from database import init_db, get_session
 from sqlalchemy.ext.asyncio import AsyncSession
-from crud import save_version, get_last_version, list_versions
+from crud import save_version, get_last_version, list_versions, get_version
 
 app = FastAPI(title=settings.APP_NAME, version="1.0.0")
 scheduler = AsyncIOScheduler()
@@ -15,13 +15,18 @@ LAST_RESULT = {"status": "idle", "message": "Aguardando primeira execução", "t
 
 async def daily_job():
     status, data = await run_pec_crawler()
+    release_html = data.pop("release_page_html", None)
     payload = {"status": status, "data": data, "execution_time": now_iso()}
     global LAST_RESULT
     LAST_RESULT = payload
-    # Persistir
     async for session in get_session():
-        if status == "success":
-            await save_version(session, data)
+        if status == "success" and data.get("versao_label"):
+            existing = await get_version(session, data["versao_label"])
+            if not existing:
+                summary = await summarize_release_notes(release_html)
+                if summary:
+                    data["release_notes_summary"] = summary
+                await save_version(session, data)
 
 @app.get("/healthz")
 async def healthz():
@@ -32,10 +37,16 @@ async def healthz():
 async def run_now(session: AsyncSession = Depends(get_session)):
     """Executa o crawler imediatamente."""
     status, data = await run_pec_crawler()
+    release_html = data.pop("release_page_html", None)
     row_id = None
-    if status == "success":
-        row = await save_version(session, data)
-        row_id = row.id
+    if status == "success" and data.get("versao_label"):
+        existing = await get_version(session, data["versao_label"])
+        if not existing:
+            summary = await summarize_release_notes(release_html)
+            if summary:
+                data["release_notes_summary"] = summary
+            row = await save_version(session, data)
+            row_id = row.id
     return {"status": status, "data": data, "id": row_id, "execution_time": now_iso()}
 
 @app.get("/last")
