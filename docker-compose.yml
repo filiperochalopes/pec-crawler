@@ -13,6 +13,8 @@ services:
     ports:
       - "8000:8000"
     restart: unless-stopped
+    volumes:
+      - .:/app
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]
       interval: 30s
