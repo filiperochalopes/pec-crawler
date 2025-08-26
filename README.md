@@ -8,6 +8,13 @@ pip install "fastapi>=0.112" "uvicorn[standard]>=0.30" "apscheduler>=3.10" \
 export TZ=America/Bahia
 export RUN_AT=07:00
 export DATABASE_URL="sqlite+aiosqlite:///./pec.sqlite3"
+# usar IA para resumir release notes
+export AZURE_OPENAI_ENDPOINT="https://example-resource.openai.azure.com/"
+export AZURE_OPENAI_API_KEY="sua-chave"
+
+Quando as variáveis acima estão definidas, o crawler acessa a página de
+release e utiliza o ChatGPT para gerar um resumo em HTML que é armazenado
+no campo `release_notes_summary`.
 
 # subir a API
 

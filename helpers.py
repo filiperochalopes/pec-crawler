@@ -4,6 +4,8 @@ from bs4 import BeautifulSoup
 from datetime import datetime, timezone
 from typing import Tuple, Optional, Dict, Any
 from urllib.parse import urljoin
+import asyncio
+from openai import AzureOpenAI
 
 from env import settings
 
@@ -60,6 +62,41 @@ async def extract_from_homepage(html: str) -> Optional[str]:
     m = re.search(r"Download\s+Vers[aã]o\s+(\d+\.\d+\.\d+)", html, flags=re.IGNORECASE)
     return m.group(1) if m else None
 
+
+async def summarize_release_notes(html: str) -> Optional[str]:
+    if not html or not settings.AZURE_OPENAI_ENDPOINT or not settings.AZURE_OPENAI_API_KEY:
+        return None
+
+    client = AzureOpenAI(
+        azure_endpoint=settings.AZURE_OPENAI_ENDPOINT,
+        api_version="2024-02-15-preview",
+        api_key=settings.AZURE_OPENAI_API_KEY,
+    )
+
+    system_prompt = (
+        "Você é um assistente que transforma conteúdos técnicos em comunicados claros e objetivos "
+        "sobre atualizações de software. Utilize sempre o seguinte modelo de resumo:\n\n"
+        "<p>🚀 A versão <strong>[versão]</strong> do Prontuário Eletrônico do Cidadão (e-SUS APS) foi "
+        "lançada em [data] e já está disponível nos ambientes de produção e treinamento.</p>\n\n"
+        "<p>Principais destaques da atualização:</p>\n• <ul><li>[<strong>item 1<strong/> resumido com clareza e sem termos técnicos excessivos]\n"
+        "• [<strong>item 2</strong> descrição]\n• [...]\n\n"
+        "Seu trabalho é aplicar esse modelo com base no conteúdo a seguir e retornar apenas o HTML dentro de uma tag <article>, sem <html>, <head> ou <body>."
+    )
+
+    def _call():
+        return client.chat.completions.create(
+            model="gpt-4o-2024-05-13",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Conteúdo a ser resumido:{html}"},
+            ],
+            temperature=0.3,
+            max_tokens=800,
+        )
+
+    response = await asyncio.to_thread(_call)
+    return response.choices[0].message["content"].strip()
+
 async def run_pec_crawler() -> Tuple[str, Dict[str, Any]]:
     try:
         blog_html, blog_url = await fetch_text(settings.BLOG_URL)
@@ -75,6 +112,7 @@ async def run_pec_crawler() -> Tuple[str, Dict[str, Any]]:
         result = {
             "versao_label": versao_label,
             "url_release_page": resolved_release_url,
+            "release_page_html": release_html,
             "link_linux": link_linux,
             "source": "sisaps blog",
             "timestamp": now_iso(),
