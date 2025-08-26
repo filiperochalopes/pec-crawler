@@ -17,7 +17,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copia o código
 COPY . .
 
-# Usuário não-root + diretório de dados (opcional, não usado p/ PG)
+# Usuário não-root + diretório de dados
 RUN adduser --disabled-password --gecos "" appuser \
  && mkdir -p /data \
  && chown -R appuser:appuser /app /data
@@ -28,5 +28,4 @@ EXPOSE 8000
 # Vars padrão (podem ser sobrescritas no compose/.env)
 ENV RUN_AT=07:00
 
-WORKDIR /app
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
