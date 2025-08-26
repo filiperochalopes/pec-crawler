@@ -1,3 +1,4 @@
+import logging
 from fastapi import FastAPI, Depends, Query
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -9,11 +10,15 @@ from database import init_db, get_session
 from sqlalchemy.ext.asyncio import AsyncSession
 from crud import save_version, get_last_version, list_versions, get_version
 
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
+
 app = FastAPI(title=settings.APP_NAME, version="1.0.0")
 scheduler = AsyncIOScheduler()
 LAST_RESULT = {"status": "idle", "message": "Aguardando primeira execução", "ts": now_iso()}
 
 async def daily_job():
+    logger.debug("Running scheduled crawler job")
     status, data = await run_pec_crawler()
     release_html = data.pop("release_page_html", None)
     payload = {"status": status, "data": data, "execution_time": now_iso()}
@@ -36,6 +41,7 @@ async def healthz():
 @app.post("/run")
 async def run_now(session: AsyncSession = Depends(get_session)):
     """Executa o crawler imediatamente."""
+    logger.debug("Running crawler via /run endpoint")
     status, data = await run_pec_crawler()
     release_html = data.pop("release_page_html", None)
     row_id = None

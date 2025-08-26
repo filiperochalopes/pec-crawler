@@ -5,21 +5,29 @@ from datetime import datetime, timezone
 from typing import Tuple, Optional, Dict, Any
 from urllib.parse import urljoin
 import asyncio
+import logging
 from openai import AzureOpenAI
 
 from env import settings
 
+logger = logging.getLogger(__name__)
+
 def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    ts = datetime.now(timezone.utc).isoformat()
+    logger.debug("Generated timestamp %s", ts)
+    return ts
 
 async def fetch_text(url: str) -> Tuple[str, str]:
+    logger.debug("Fetching URL: %s", url)
     headers = {"User-Agent": "Mozilla/5.0 (+pec-crawler)"}
     async with httpx.AsyncClient(follow_redirects=True, timeout=30.0, headers=headers) as client:
         r = await client.get(url)
         r.raise_for_status()
+        logger.debug("Fetched %s with status %s", r.url, r.status_code)
         return r.text, str(r.url)
 
 def extract_latest_post_from_blog(html: str, base_url: str) -> Tuple[str, Optional[str]]:
+    logger.debug("Extracting latest post from blog")
     soup = BeautifulSoup(html, "lxml")
 
     # Preferência: links do tipo /blog/versao-...
@@ -43,6 +51,7 @@ def extract_latest_post_from_blog(html: str, base_url: str) -> Tuple[str, Option
     raise ValueError("Não encontrei a URL do post da versão no Blog.")
 
 def extract_linux_link(html: str, base_url: str) -> Optional[str]:
+    logger.debug("Searching for Linux download link")
     soup = BeautifulSoup(html, "lxml")
 
     for a in soup.find_all("a", href=True):
@@ -56,15 +65,19 @@ def extract_linux_link(html: str, base_url: str) -> Optional[str]:
         if any(k in href for k in ["linux", ".deb", ".rpm", ".zip"]):
             return urljoin(base_url, a["href"])
 
+    logger.debug("Linux link not found")
     return None
 
 async def extract_from_homepage(html: str) -> Optional[str]:
+    logger.debug("Extracting version from homepage")
     m = re.search(r"Download\s+Vers[aã]o\s+(\d+\.\d+\.\d+)", html, flags=re.IGNORECASE)
     return m.group(1) if m else None
 
 
 async def summarize_release_notes(html: str) -> Optional[str]:
+    logger.debug("Summarizing release notes")
     if not html or not settings.AZURE_OPENAI_ENDPOINT or not settings.AZURE_OPENAI_API_KEY:
+        logger.debug("Skipping summarization due to missing HTML or Azure settings")
         return None
 
     client = AzureOpenAI(
@@ -95,15 +108,21 @@ async def summarize_release_notes(html: str) -> Optional[str]:
         )
 
     response = await asyncio.to_thread(_call)
-    return response.choices[0].message["content"].strip()
+    summary = response.choices[0].message["content"].strip()
+    logger.debug("Generated summary with %d chars", len(summary))
+    return summary
 
 async def run_pec_crawler() -> Tuple[str, Dict[str, Any]]:
     try:
+        logger.debug("Starting PEC crawler")
         blog_html, blog_url = await fetch_text(settings.BLOG_URL)
         release_url, versao_label = extract_latest_post_from_blog(blog_html, blog_url)
 
         release_html, resolved_release_url = await fetch_text(release_url)
         link_linux = extract_linux_link(release_html, resolved_release_url)
+
+        if not link_linux:
+            raise ValueError("Linux download link not found")
 
         if not versao_label:
             home_html, _ = await fetch_text(settings.BASE_URL)
@@ -118,8 +137,10 @@ async def run_pec_crawler() -> Tuple[str, Dict[str, Any]]:
             "timestamp": now_iso(),
             "crawler_version": "1.0.0",
         }
+        logger.debug("Crawler result: %s", result)
         return "success", result
     except Exception as e:
+        logger.debug("Crawler failed: %s", e)
         return "error", {
             "error": "crawler failed",
             "message": str(e),
@@ -127,5 +148,6 @@ async def run_pec_crawler() -> Tuple[str, Dict[str, Any]]:
         }
 
 def parse_time_hhmm(s: str) -> tuple[int, int]:
+    logger.debug("Parsing time string: %s", s)
     h, m = s.split(":")
     return int(h), int(m)
