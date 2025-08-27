@@ -1,8 +1,8 @@
 # dentro de pec_app/
 python -m venv .venv && source .venv/bin/activate
 pip install "fastapi>=0.112" "uvicorn[standard]>=0.30" "apscheduler>=3.10" \
-            "httpx>=0.27" "beautifulsoup4>=4.12" "lxml>=5.2" \
-            "sqlalchemy>=2.0" "aiosqlite>=0.20"
+            "playwright>=1.41" "sqlalchemy>=2.0" "aiosqlite>=0.20"
+playwright install chromium
 
 # (opcional) configs
 export TZ=America/Bahia
