@@ -1,6 +1,5 @@
 import re
-import httpx
-from bs4 import BeautifulSoup
+from playwright.async_api import async_playwright, Page
 from datetime import datetime, timezone
 from typing import Tuple, Optional, Dict, Any
 from urllib.parse import urljoin
@@ -17,56 +16,42 @@ def now_iso() -> str:
     logger.debug("Generated timestamp %s", ts)
     return ts
 
-async def fetch_text(url: str) -> Tuple[str, str]:
-    logger.debug("Fetching URL: %s", url)
-    headers = {"User-Agent": "Mozilla/5.0 (+pec-crawler)"}
-    async with httpx.AsyncClient(follow_redirects=True, timeout=30.0, headers=headers) as client:
-        r = await client.get(url)
-        r.raise_for_status()
-        logger.debug("Fetched %s with status %s", r.url, r.status_code)
-        return r.text, str(r.url)
-
-def extract_latest_post_from_blog(html: str, base_url: str) -> Tuple[str, Optional[str]]:
+async def extract_latest_post_from_blog(page: Page, base_url: str) -> Tuple[str, Optional[str]]:
     logger.debug("Extracting latest post from blog")
-    soup = BeautifulSoup(html, "lxml")
+    await page.goto(base_url)
 
-    # Preferência: links do tipo /blog/versao-...
-    for a in soup.find_all("a", href=True):
-        href = a["href"]
-        text = (a.get_text() or "").strip()
-        if "/blog/versao-" in href:
-            release_url = urljoin(base_url, href)
-            m = re.search(r"(\d+\.\d+\.\d+)", text) or re.search(r"(\d+\.\d+\.\d+)", href)
-            versao = m.group(1) if m else None
-            return release_url, versao
+    locator = page.locator("a[href*='/blog/versao-']").first
+    if await locator.count() > 0:
+        href = await locator.get_attribute("href") or ""
+        text = await locator.text_content() or ""
+        release_url = urljoin(base_url, href)
+        m = re.search(r"(\d+\.\d+\.\d+)", text) or re.search(r"(\d+\.\d+\.\d+)", href)
+        versao = m.group(1) if m else None
+        return release_url, versao
 
-    # Fallback: primeiro "Leia Mais"
-    a = soup.find("a", string=lambda s: s and "Leia Mais" in s)
-    if a and a.has_attr("href"):
-        release_url = urljoin(base_url, a["href"])
-        m = re.search(r"(\d+\.\d+\.\d+)", a.get_text(strip=True)) or re.search(r"(\d+\.\d+\.\d+)", release_url)
+    locator = page.locator("a", has_text="Leia Mais").first
+    if await locator.count() > 0:
+        href = await locator.get_attribute("href") or ""
+        text = await locator.text_content() or ""
+        release_url = urljoin(base_url, href)
+        m = re.search(r"(\d+\.\d+\.\d+)", text) or re.search(r"(\d+\.\d+\.\d+)", href)
         versao = m.group(1) if m else None
         return release_url, versao
 
     raise ValueError("Não encontrei a URL do post da versão no Blog.")
 
-def extract_linux_link(html: str, base_url: str) -> Optional[str]:
+async def extract_linux_link(page: Page) -> Optional[str]:
     logger.debug("Searching for Linux download link")
-    soup = BeautifulSoup(html, "lxml")
+    button = page.locator("button", has_text="Linux").first
+    if await button.count() == 0:
+        logger.debug("Linux link not found")
+        return None
 
-    for a in soup.find_all("a", href=True):
-        txt = (a.get_text() or "")
-        if "Linux" in txt or "Versão para Linux" in txt or "Download para Linux" in txt:
-            return urljoin(base_url, a["href"])
-
-    # Fallback heurístico
-    for a in soup.find_all("a", href=True):
-        href = a["href"].lower()
-        if any(k in href for k in ["linux", ".deb", ".rpm", ".zip"]):
-            return urljoin(base_url, a["href"])
-
-    logger.debug("Linux link not found")
-    return None
+    async with page.expect_download() as download_info:
+        await button.click()
+    download = await download_info.value
+    link = download.url
+    return link
 
 async def extract_from_homepage(html: str) -> Optional[str]:
     logger.debug("Extracting version from homepage")
@@ -115,18 +100,27 @@ async def summarize_release_notes(html: str) -> Optional[str]:
 async def run_pec_crawler() -> Tuple[str, Dict[str, Any]]:
     try:
         logger.debug("Starting PEC crawler")
-        blog_html, blog_url = await fetch_text(settings.BLOG_URL)
-        release_url, versao_label = extract_latest_post_from_blog(blog_html, blog_url)
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch()
+            context = await browser.new_context(accept_downloads=True)
+            page = await context.new_page()
 
-        release_html, resolved_release_url = await fetch_text(release_url)
-        link_linux = extract_linux_link(release_html, resolved_release_url)
+            release_url, versao_label = await extract_latest_post_from_blog(page, settings.BLOG_URL)
 
-        if not link_linux:
-            raise ValueError("Linux download link not found")
+            await page.goto(release_url)
+            resolved_release_url = page.url
+            release_html = await page.content()
+            link_linux = await extract_linux_link(page)
 
-        if not versao_label:
-            home_html, _ = await fetch_text(settings.BASE_URL)
-            versao_label = await extract_from_homepage(home_html)
+            if not link_linux:
+                raise ValueError("Linux download link not found")
+
+            if not versao_label:
+                await page.goto(settings.BASE_URL)
+                home_html = await page.content()
+                versao_label = await extract_from_homepage(home_html)
+
+            await browser.close()
 
         result = {
             "versao_label": versao_label,
