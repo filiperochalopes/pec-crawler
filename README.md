@@ -112,6 +112,8 @@ CREATE TABLE pec_versions (
 
 Este repositório faz parte de uma automação em parceria com:
 
-<p>
-  <img src="assets/noharm-logo.png" alt="Noharm.ai" width="260">
+<p align="center">
+  <a href="https://noharm.ai/" target="_blank" rel="noopener noreferrer">
+    <img src="assets/noharm-logo.png" alt="Noharm.ai" width="260">
+  </a>
 </p>
