@@ -1,5 +1,9 @@
 import re
-from playwright.async_api import async_playwright, Page
+from playwright.async_api import (
+    Page,
+    TimeoutError as PlaywrightTimeoutError,
+    async_playwright,
+)
 from datetime import datetime, timezone
 from typing import Tuple, Optional, Dict, Any
 from urllib.parse import urljoin
@@ -8,15 +12,25 @@ import logging
 from openai import AzureOpenAI
 
 from env import settings
+from parsing import (
+    build_release_url,
+    extract_homepage_version,
+    extract_linux_download_url,
+    extract_version,
+)
 
 logger = logging.getLogger(__name__)
+
 
 def now_iso() -> str:
     ts = datetime.now(timezone.utc).isoformat()
     logger.debug("Generated timestamp %s", ts)
     return ts
 
-async def extract_latest_post_from_blog(page: Page, base_url: str) -> Tuple[str, Optional[str]]:
+
+async def extract_latest_post_from_blog(
+    page: Page, base_url: str
+) -> Tuple[str, Optional[str]]:
     logger.debug("Extracting latest post from blog")
     await page.goto(base_url)
 
@@ -25,8 +39,7 @@ async def extract_latest_post_from_blog(page: Page, base_url: str) -> Tuple[str,
         href = await locator.get_attribute("href") or ""
         text = await locator.text_content() or ""
         release_url = urljoin(base_url, href)
-        m = re.search(r"(\d+\.\d+\.\d+)", text) or re.search(r"(\d+\.\d+\.\d+)", href)
-        versao = m.group(1) if m else None
+        versao = extract_version(text) or extract_version(href)
         return release_url, versao
 
     locator = page.locator("a", has_text="Leia Mais").first
@@ -34,34 +47,151 @@ async def extract_latest_post_from_blog(page: Page, base_url: str) -> Tuple[str,
         href = await locator.get_attribute("href") or ""
         text = await locator.text_content() or ""
         release_url = urljoin(base_url, href)
-        m = re.search(r"(\d+\.\d+\.\d+)", text) or re.search(r"(\d+\.\d+\.\d+)", href)
-        versao = m.group(1) if m else None
+        versao = extract_version(text) or extract_version(href)
         return release_url, versao
 
     raise ValueError("Não encontrei a URL do post da versão no Blog.")
 
+
 async def extract_linux_link(page: Page) -> Optional[str]:
     logger.debug("Searching for Linux download link")
-    button = page.locator("button", has_text="Linux").first
+    button = page.locator(
+        "button", has_text=re.compile(r"Download.*Linux", flags=re.IGNORECASE)
+    ).first
     if await button.count() == 0:
         logger.debug("Linux link not found")
         return None
 
-    async with page.expect_download() as download_info:
-        await button.click()
-    download = await download_info.value
-    link = download.url
-    return link
+    # Prefer declarative markup if the portal adopts a normal link later.
+    anchor_href = await button.evaluate(
+        "element => element.closest('a') ? element.closest('a').href : null"
+    )
+    link = extract_linux_download_url(anchor_href or "")
+    if link:
+        return link
+
+    # The current Docusaurus page attaches the URL in a React onClick prop,
+    # rather than exposing it as an href. Wait for hydration, then read the
+    # handler without executing it or starting the very large JAR download.
+    button_handle = await button.element_handle()
+    if button_handle:
+        try:
+            await page.wait_for_function(
+                """element => Object.keys(element).some(
+                    key => key.startsWith('__reactProps$')
+                )""",
+                arg=button_handle,
+                timeout=10_000,
+            )
+        except PlaywrightTimeoutError:
+            logger.debug("React props were not available on the Linux button")
+
+        handler_source = await button.evaluate(
+            """element => {
+                const key = Object.keys(element).find(
+                    key => key.startsWith('__reactProps$')
+                );
+                const handler = key && element[key] && element[key].onClick;
+                return handler ? handler.toString() : '';
+            }"""
+        )
+        link = extract_linux_download_url(handler_source or "")
+        if link:
+            return link
+
+    # The homepage uses a React onClick handler instead of an anchor. Capture the
+    # resulting installer request as a fallback, but abort it: the crawler only
+    # needs its URL and downloading the full JAR wastes time, memory and disk.
+    download_request = asyncio.get_running_loop().create_future()
+    linux_installer_pattern = re.compile(
+        r"Linux[^/?]*\.(?:jar|zip)(?:[?#]|$)", re.IGNORECASE
+    )
+
+    async def capture_download(route):
+        if not download_request.done():
+            download_request.set_result(route.request.url)
+        await route.abort()
+
+    await page.route(linux_installer_pattern, capture_download)
+    click_error = None
+    try:
+        try:
+            await button.click(no_wait_after=True)
+        except Exception as exc:
+            # An aborted navigation may surface on the click. Preserve it and
+            # only re-raise when no matching installer request was captured.
+            click_error = exc
+
+        try:
+            return await asyncio.wait_for(download_request, timeout=30)
+        except asyncio.TimeoutError as exc:
+            if click_error:
+                raise click_error
+            raise ValueError(
+                "O botão Linux não iniciou uma requisição de download."
+            ) from exc
+    finally:
+        await page.unroute(linux_installer_pattern, capture_download)
+
 
 async def extract_from_homepage(html: str) -> Optional[str]:
     logger.debug("Extracting version from homepage")
-    m = re.search(r"Download\s+Vers[aã]o\s+(\d+\.\d+\.\d+)", html, flags=re.IGNORECASE)
-    return m.group(1) if m else None
+    return extract_homepage_version(html)
+
+
+async def extract_latest_release_from_homepage(
+    page: Page, base_url: str, releases_url: str
+) -> Tuple[str, str]:
+    """Discover the current Docusaurus release family from the homepage."""
+    logger.debug("Discovering latest release from homepage %s", base_url)
+    await page.goto(base_url, wait_until="domcontentloaded")
+
+    button = page.locator(
+        "button", has_text=re.compile(r"Download.*Linux", flags=re.IGNORECASE)
+    ).first
+    if await button.count() == 0:
+        raise ValueError(
+            "Não encontrei o botão de download para Linux na página inicial."
+        )
+
+    button_text = await button.text_content() or ""
+    advertised_version = extract_homepage_version(button_text)
+    if not advertised_version:
+        advertised_version = extract_homepage_version(await page.content())
+    if not advertised_version:
+        raise ValueError("Não encontrei a versão atual na página inicial.")
+
+    return build_release_url(releases_url, advertised_version), advertised_version
+
+
+async def extract_release_page(
+    page: Page, release_url: str
+) -> Tuple[str, Optional[str], str]:
+    """Extract the canonical URL, full version and release article HTML."""
+    logger.debug("Extracting Docusaurus release page %s", release_url)
+    response = await page.goto(release_url, wait_until="domcontentloaded")
+    if response and not response.ok:
+        raise ValueError(
+            f"Página de release retornou HTTP {response.status}: {release_url}"
+        )
+
+    article = page.locator("article").first
+    await article.wait_for(state="visible")
+
+    heading = article.locator("h1").first
+    heading_text = await heading.text_content() if await heading.count() else ""
+    version = extract_version(heading_text or "")
+    release_html = await article.inner_html()
+    return page.url, version, release_html
 
 
 async def summarize_release_notes(html: str) -> Optional[str]:
     logger.debug("Summarizing release notes")
-    if not html or not settings.AZURE_OPENAI_ENDPOINT or not settings.AZURE_OPENAI_API_KEY:
+    if (
+        not html
+        or not settings.AZURE_OPENAI_ENDPOINT
+        or not settings.AZURE_OPENAI_API_KEY
+    ):
         logger.debug("Skipping summarization due to missing HTML or Azure settings")
         return None
 
@@ -93,9 +223,10 @@ async def summarize_release_notes(html: str) -> Optional[str]:
         )
 
     response = await asyncio.to_thread(_call)
-    summary = response.choices[0].message["content"].strip()
+    summary = (response.choices[0].message.content or "").strip()
     logger.debug("Generated summary with %d chars", len(summary))
     return summary
+
 
 async def run_pec_crawler() -> Tuple[str, Dict[str, Any]]:
     try:
@@ -105,20 +236,22 @@ async def run_pec_crawler() -> Tuple[str, Dict[str, Any]]:
             context = await browser.new_context(accept_downloads=True)
             page = await context.new_page()
 
-            release_url, versao_label = await extract_latest_post_from_blog(page, settings.BLOG_URL)
-
-            await page.goto(release_url)
-            resolved_release_url = page.url
-            release_html = await page.content()
+            (
+                release_url,
+                advertised_version,
+            ) = await extract_latest_release_from_homepage(
+                page, settings.BASE_URL, settings.RELEASES_URL
+            )
             link_linux = await extract_linux_link(page)
-
             if not link_linux:
-                raise ValueError("Linux download link not found")
+                raise ValueError("Não encontrei o link de download para Linux.")
 
-            if not versao_label:
-                await page.goto(settings.BASE_URL)
-                home_html = await page.content()
-                versao_label = await extract_from_homepage(home_html)
+            (
+                resolved_release_url,
+                release_version,
+                release_html,
+            ) = await extract_release_page(page, release_url)
+            versao_label = release_version or advertised_version
 
             await browser.close()
 
@@ -127,9 +260,9 @@ async def run_pec_crawler() -> Tuple[str, Dict[str, Any]]:
             "url_release_page": resolved_release_url,
             "release_page_html": release_html,
             "link_linux": link_linux,
-            "source": "sisaps blog",
+            "source": "sisaps docs",
             "timestamp": now_iso(),
-            "crawler_version": "1.0.0",
+            "crawler_version": "2.0.0",
         }
         logger.debug("Crawler result: %s", result)
         return "success", result
@@ -140,6 +273,7 @@ async def run_pec_crawler() -> Tuple[str, Dict[str, Any]]:
             "message": str(e),
             "timestamp": now_iso(),
         }
+
 
 def parse_time_hhmm(s: str) -> tuple[int, int]:
     logger.debug("Parsing time string: %s", s)
