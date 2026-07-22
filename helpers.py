@@ -93,7 +93,8 @@ async def summarize_release_notes(html: str) -> Optional[str]:
         )
 
     response = await asyncio.to_thread(_call)
-    summary = response.choices[0].message["content"].strip()
+    message = response.choices[0].message
+    summary = getattr(message, "content", "").strip()
     logger.debug("Generated summary with %d chars", len(summary))
     return summary
 
