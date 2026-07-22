@@ -79,6 +79,7 @@ A API será exposta na porta `8000`.
 | --- | --- | --- |
 | `POST` | `/run` | Executa o crawler imediatamente e persiste uma nova versão, se encontrada. |
 | `GET` | `/last` | Retorna a última versão persistida. |
+| `GET` | `/{version}` | Retorna uma versão persistida, usando o formato `5.4.38`. |
 | `GET` | `/runs?limit=20` | Lista as versões mais recentes. Aceita de 1 a 200 itens. |
 | `GET` | `/healthz` | Verifica se a API está disponível. |
 
@@ -90,6 +91,9 @@ curl -X POST http://localhost:8000/run
 
 # Consultar a última versão encontrada
 curl http://localhost:8000/last
+
+# Consultar uma versão específica
+curl http://localhost:8000/5.4.38
 
 # Consultar o status da aplicação
 curl http://localhost:8000/healthz

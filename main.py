@@ -1,5 +1,5 @@
 import logging
-from fastapi import FastAPI, Depends, Query
+from fastapi import FastAPI, Depends, HTTPException, Path, Query
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from zoneinfo import ZoneInfo
@@ -16,6 +16,17 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title=settings.APP_NAME, version="1.0.0")
 scheduler = AsyncIOScheduler()
 LAST_RESULT = {"status": "idle", "message": "Aguardando primeira execução", "ts": now_iso()}
+
+
+def serialize_version(row):
+    return {
+        "id": row.id,
+        "version": row.version,
+        "download_link": row.download_link,
+        "release_notes_page": row.release_notes_page,
+        "release_notes_summary": row.release_notes_summary,
+        "created_at": row.created_at,
+    }
 
 async def daily_job():
     logger.debug("Running scheduled crawler job")
@@ -61,14 +72,7 @@ async def last(session: AsyncSession = Depends(get_session)):
     row = await get_last_version(session)
     if not row:
         return LAST_RESULT
-    return {
-        "id": row.id,
-        "version": row.version,
-        "download_link": row.download_link,
-        "release_notes_page": row.release_notes_page,
-        "release_notes_summary": row.release_notes_summary,
-        "created_at": row.created_at,
-    }
+    return serialize_version(row)
 
 @app.get("/runs")
 async def runs(limit: int = Query(20, ge=1, le=200), session: AsyncSession = Depends(get_session)):
@@ -82,6 +86,18 @@ async def runs(limit: int = Query(20, ge=1, le=200), session: AsyncSession = Dep
         }
         for r in rows
     ]
+
+
+@app.get("/{version}")
+async def version_detail(
+    version: str = Path(pattern=r"^\d+\.\d+\.\d+$", examples=["5.4.38"]),
+    session: AsyncSession = Depends(get_session),
+):
+    """Retorna os dados persistidos de uma versão específica."""
+    row = await get_version(session, version)
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Versão {version} não encontrada")
+    return serialize_version(row)
 
 @app.on_event("startup")
 async def _startup():
