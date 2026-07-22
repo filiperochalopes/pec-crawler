@@ -197,7 +197,7 @@ async def summarize_release_notes(html: str) -> Optional[str]:
 
     client = AzureOpenAI(
         azure_endpoint=settings.AZURE_OPENAI_ENDPOINT,
-        api_version="2024-02-15-preview",
+        api_version=settings.AZURE_OPENAI_API_VERSION,
         api_key=settings.AZURE_OPENAI_API_KEY,
     )
 
@@ -213,7 +213,7 @@ async def summarize_release_notes(html: str) -> Optional[str]:
 
     def _call():
         return client.chat.completions.create(
-            model="gpt-4o-2024-05-13",
+            model=settings.AZURE_OPENAI_DEPLOYMENT,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"Conteúdo a ser resumido:{html}"},
@@ -223,7 +223,8 @@ async def summarize_release_notes(html: str) -> Optional[str]:
         )
 
     response = await asyncio.to_thread(_call)
-    summary = (response.choices[0].message.content or "").strip()
+    message = response.choices[0].message
+    summary = (getattr(message, "content", "") or "").strip()
     logger.debug("Generated summary with %d chars", len(summary))
     return summary
 

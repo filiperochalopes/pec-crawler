@@ -44,6 +44,8 @@ Para habilitar o resumo das notas de versão com IA, inclua:
 ```bash
 export AZURE_OPENAI_ENDPOINT="https://seu-recurso.openai.azure.com/"
 export AZURE_OPENAI_API_KEY="sua-chave"
+export AZURE_OPENAI_DEPLOYMENT="gpt-4o-2024-05-13"
+export AZURE_OPENAI_API_VERSION="2024-02-15-preview"
 ```
 
 Quando essas variáveis estão definidas, o resumo em HTML é salvo no campo `release_notes_summary`.
@@ -104,7 +106,7 @@ CREATE TABLE pec_versions (
     download_link TEXT NOT NULL,
     release_notes_page TEXT,
     release_notes_summary TEXT,
-    created_at TIMESTAMP NOT NULL
+    created_at TIMESTAMP NOT NULL DEFAULT now()
 );
 ```
 

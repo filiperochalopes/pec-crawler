@@ -18,6 +18,12 @@ class Settings:
     )
     AZURE_OPENAI_ENDPOINT: str = os.getenv("AZURE_OPENAI_ENDPOINT", "")
     AZURE_OPENAI_API_KEY: str = os.getenv("AZURE_OPENAI_API_KEY", "")
+    AZURE_OPENAI_DEPLOYMENT: str = os.getenv(
+        "AZURE_OPENAI_DEPLOYMENT", "gpt-4o-2024-05-13"
+    )
+    AZURE_OPENAI_API_VERSION: str = os.getenv(
+        "AZURE_OPENAI_API_VERSION", "2024-02-15-preview"
+    )
 
     @property
     def BLOG_URL(self) -> str:
