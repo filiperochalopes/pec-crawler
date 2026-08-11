@@ -13,6 +13,7 @@ from openai import AzureOpenAI
 
 from env import settings
 from parsing import (
+    build_release_blog_url,
     build_release_url,
     extract_homepage_version,
     extract_linux_download_url,
@@ -20,6 +21,10 @@ from parsing import (
 )
 
 logger = logging.getLogger(__name__)
+
+LINUX_DOWNLOAD_BUTTON = re.compile(
+    r"(?:download|vers[aã]o).*linux|linux", flags=re.IGNORECASE
+)
 
 
 def now_iso() -> str:
@@ -56,7 +61,7 @@ async def extract_latest_post_from_blog(
 async def extract_linux_link(page: Page) -> Optional[str]:
     logger.debug("Searching for Linux download link")
     button = page.locator(
-        "button", has_text=re.compile(r"Download.*Linux", flags=re.IGNORECASE)
+        "button", has_text=LINUX_DOWNLOAD_BUTTON
     ).first
     if await button.count() == 0:
         logger.debug("Linux link not found")
@@ -142,16 +147,22 @@ async def extract_from_homepage(html: str) -> Optional[str]:
 async def extract_latest_release_from_homepage(
     page: Page, base_url: str, releases_url: str
 ) -> Tuple[str, str]:
-    """Discover the current Docusaurus release family from the homepage."""
+    """Discover the current release post from the homepage.
+
+    SISAPS used to expose platform-specific buttons on this page.  The current
+    site has one generic button which points to a versioned blog post, where the
+    Linux installer control lives.  Keep the version extraction independent of
+    the button label so both layouts work.
+    """
     logger.debug("Discovering latest release from homepage %s", base_url)
     await page.goto(base_url, wait_until="domcontentloaded")
 
     button = page.locator(
-        "button", has_text=re.compile(r"Download.*Linux", flags=re.IGNORECASE)
+        "button", has_text=re.compile(r"Download.*Vers[aã]o", flags=re.IGNORECASE)
     ).first
     if await button.count() == 0:
         raise ValueError(
-            "Não encontrei o botão de download para Linux na página inicial."
+            "Não encontrei o botão de download na página inicial."
         )
 
     button_text = await button.text_content() or ""
@@ -161,6 +172,11 @@ async def extract_latest_release_from_homepage(
     if not advertised_version:
         raise ValueError("Não encontrei a versão atual na página inicial.")
 
+    # Since 2026 the versioned blog post is the canonical release page.  The
+    # old documentation URL is retained as a fallback for portals that still
+    # publish only a major/minor version on the homepage.
+    if advertised_version.count(".") >= 2:
+        return build_release_blog_url(base_url, advertised_version), advertised_version
     return build_release_url(releases_url, advertised_version), advertised_version
 
 
@@ -243,15 +259,14 @@ async def run_pec_crawler() -> Tuple[str, Dict[str, Any]]:
             ) = await extract_latest_release_from_homepage(
                 page, settings.BASE_URL, settings.RELEASES_URL
             )
-            link_linux = await extract_linux_link(page)
-            if not link_linux:
-                raise ValueError("Não encontrei o link de download para Linux.")
-
             (
                 resolved_release_url,
                 release_version,
                 release_html,
             ) = await extract_release_page(page, release_url)
+            link_linux = await extract_linux_link(page)
+            if not link_linux:
+                raise ValueError("Não encontrei o link de download para Linux.")
             versao_label = release_version or advertised_version
 
             await browser.close()

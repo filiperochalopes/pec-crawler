@@ -17,7 +17,7 @@ def extract_version(text: str) -> Optional[str]:
 
 
 def extract_homepage_version(text: str) -> Optional[str]:
-    """Extract the version advertised by a Windows/Linux download control."""
+    """Extract the version advertised by a download control on the homepage."""
     match = re.search(
         r"Download(?:\s+para\s+(?:Windows|Linux))?\s*-?\s*"
         r"Vers[aã]o\s+(\d+\.\d+(?:\.\d+)?)",
@@ -25,6 +25,16 @@ def extract_homepage_version(text: str) -> Optional[str]:
         flags=re.IGNORECASE,
     )
     return match.group(1) if match else None
+
+
+def build_release_blog_url(base_url: str, version: str) -> str:
+    """Build the current SISAPS release-post URL from its full version."""
+    if not VERSION_PATTERN.fullmatch(version or ""):
+        raise ValueError(f"Versão inválida para post de release: {version!r}")
+
+    return urljoin(
+        base_url.rstrip("/") + "/", f"blog/versao-{version.replace('.', '-')}"
+    )
 
 
 def extract_linux_download_url(text: str) -> Optional[str]:

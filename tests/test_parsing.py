@@ -1,6 +1,7 @@
 import unittest
 
 from parsing import (
+    build_release_blog_url,
     build_release_url,
     extract_homepage_version,
     extract_linux_download_url,
@@ -16,6 +17,11 @@ class VersionParsingTests(unittest.TestCase):
 
     def test_keeps_legacy_three_part_homepage_version_compatible(self):
         self.assertEqual(extract_homepage_version("Download Versão 5.4.18"), "5.4.18")
+
+    def test_extracts_version_from_the_current_generic_download_button(self):
+        self.assertEqual(
+            extract_homepage_version("Download - Versão 5.5.24"), "5.5.24"
+        )
 
     def test_extracts_full_version_from_release_heading(self):
         self.assertEqual(extract_version("Versão 5.5.22 - 10/07/2026"), "5.5.22")
@@ -43,6 +49,14 @@ class VersionParsingTests(unittest.TestCase):
         self.assertEqual(
             build_release_url("https://example.test/docs/Versoes/", "5.5.22"),
             "https://example.test/docs/Versoes/versao_5_5",
+        )
+
+    def test_builds_current_versioned_blog_post_url(self):
+        self.assertEqual(
+            build_release_blog_url(
+                "https://sisaps.saude.gov.br/sistemas/esusaps/", "5.5.24"
+            ),
+            "https://sisaps.saude.gov.br/sistemas/esusaps/blog/versao-5-5-24",
         )
 
 
