@@ -267,7 +267,14 @@ async def run_pec_crawler() -> Tuple[str, Dict[str, Any]]:
             link_linux = await extract_linux_link(page)
             if not link_linux:
                 raise ValueError("Não encontrei o link de download para Linux.")
-            versao_label = release_version or advertised_version
+            # The release article may identify only a major/minor family (for
+            # example, 5.5). The installer URL contains the specific published
+            # build, so it is the canonical value to persist.
+            versao_label = (
+                extract_version(link_linux)
+                or release_version
+                or advertised_version
+            )
 
             await browser.close()
 
