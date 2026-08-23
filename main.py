@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 
 from env import settings
 from helpers import run_pec_crawler, now_iso, parse_time_hhmm, summarize_release_notes
+from parsing import is_full_version
 from database import init_db, get_session
 from sqlalchemy.ext.asyncio import AsyncSession
 from crud import save_version, get_last_version, list_versions, get_version
@@ -36,8 +37,9 @@ async def daily_job():
     global LAST_RESULT
     LAST_RESULT = payload
     async for session in get_session():
-        if status == "success" and data.get("versao_label"):
-            existing = await get_version(session, data["versao_label"])
+        version = data.get("versao_label")
+        if status == "success" and is_full_version(version):
+            existing = await get_version(session, version)
             if not existing:
                 summary = await summarize_release_notes(release_html)
                 if summary:
@@ -56,8 +58,9 @@ async def run_now(session: AsyncSession = Depends(get_session)):
     status, data = await run_pec_crawler()
     release_html = data.pop("release_page_html", None)
     row_id = None
-    if status == "success" and data.get("versao_label"):
-        existing = await get_version(session, data["versao_label"])
+    version = data.get("versao_label")
+    if status == "success" and is_full_version(version):
+        existing = await get_version(session, version)
         if not existing:
             summary = await summarize_release_notes(release_html)
             if summary:
