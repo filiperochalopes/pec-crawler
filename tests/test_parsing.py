@@ -3,9 +3,11 @@ import unittest
 from parsing import (
     build_release_blog_url,
     build_release_url,
+    extract_full_version,
     extract_homepage_version,
     extract_linux_download_url,
     extract_version,
+    is_full_version,
 )
 
 
@@ -25,6 +27,17 @@ class VersionParsingTests(unittest.TestCase):
 
     def test_extracts_full_version_from_release_heading(self):
         self.assertEqual(extract_version("Versão 5.5.22 - 10/07/2026"), "5.5.22")
+
+    def test_extracts_full_version_from_linux_installer_url(self):
+        url = (
+            "https://arquivos.esusaps.ufsc.br/PEC/hash/5.5.24/"
+            "eSUS-AB-PEC-5.5.24-Linux64.jar"
+        )
+        self.assertEqual(extract_full_version(url), "5.5.24")
+
+    def test_rejects_major_minor_version_for_persistence(self):
+        self.assertFalse(is_full_version("5.5"))
+        self.assertTrue(is_full_version("5.5.24"))
 
     def test_extracts_linux_url_from_react_handler(self):
         handler = (

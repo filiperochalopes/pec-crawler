@@ -4,6 +4,7 @@ from urllib.parse import urljoin
 
 
 VERSION_PATTERN = re.compile(r"(?<!\d)(\d+\.\d+(?:\.\d+)?)(?!\d)")
+FULL_VERSION_PATTERN = re.compile(r"(?<!\d)(\d+\.\d+\.\d+)(?!\d)")
 LINUX_DOWNLOAD_PATTERN = re.compile(
     r"https?://[^\s\"'<>]*Linux[^\s\"'<>]*\.(?:jar|zip)(?:\?[^\s\"'<>]*)?",
     flags=re.IGNORECASE,
@@ -14,6 +15,17 @@ def extract_version(text: str) -> Optional[str]:
     """Return a major.minor or major.minor.patch version found in text."""
     match = VERSION_PATTERN.search(text or "")
     return match.group(1) if match else None
+
+
+def extract_full_version(text: str) -> Optional[str]:
+    """Return a major.minor.patch version found in text."""
+    match = FULL_VERSION_PATTERN.search(text or "")
+    return match.group(1) if match else None
+
+
+def is_full_version(version: str | None) -> bool:
+    """Whether *version* has the format required for persistence."""
+    return bool(FULL_VERSION_PATTERN.fullmatch(version or ""))
 
 
 def extract_homepage_version(text: str) -> Optional[str]:

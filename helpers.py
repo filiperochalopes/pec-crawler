@@ -15,9 +15,11 @@ from env import settings
 from parsing import (
     build_release_blog_url,
     build_release_url,
+    extract_full_version,
     extract_homepage_version,
     extract_linux_download_url,
     extract_version,
+    is_full_version,
 )
 
 logger = logging.getLogger(__name__)
@@ -267,7 +269,23 @@ async def run_pec_crawler() -> Tuple[str, Dict[str, Any]]:
             link_linux = await extract_linux_link(page)
             if not link_linux:
                 raise ValueError("Não encontrei o link de download para Linux.")
-            versao_label = release_version or advertised_version
+            # The homepage and legacy documentation pages may advertise only a
+            # major/minor family (for example, ``5.5``).  The installer URL
+            # includes the released build and is therefore the reliable
+            # fallback for the value stored in the database.
+            version_candidates = (
+                release_version,
+                advertised_version,
+                extract_full_version(link_linux),
+            )
+            versao_label = next(
+                (version for version in version_candidates if is_full_version(version)),
+                None,
+            )
+            if not versao_label:
+                raise ValueError(
+                    "Não encontrei uma versão completa (major.minor.patch) para persistir."
+                )
 
             await browser.close()
 
