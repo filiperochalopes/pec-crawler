@@ -50,10 +50,16 @@ export AZURE_OPENAI_API_VERSION="2024-02-15-preview"
 
 Quando essas variáveis estão definidas, o resumo em HTML é salvo no campo `release_notes_summary`.
 
-O crawler lê a família publicada na página inicial (por exemplo, `5.5`),
-consulta a página correspondente (`docs/Versoes/versao_5_5`) e persiste a
-versão completa encontrada nas notas (por exemplo, `5.5.22`) junto com o
-link do instalador Linux.
+O crawler segue o controle "Download" publicado na página inicial até a página
+de notas (aceita link, `onclick`, nova aba, navegação de SPA e redirecionamentos),
+sem montar URLs a partir do número da versão. Na página de notas, resolve o
+endereço do controle Linux sem baixar o instalador. A versão completa vem do
+caminho do instalador (por exemplo, `5.6.1`) ou do título da página, e precisa
+pertencer à família anunciada, quando houver. Versões já registradas não são
+inseridas novamente.
+
+Uma falha na coleta agendada é registrada como erro pelo agendador. O endpoint
+`/healthz` indica apenas que a API está ativa; não confirma o sucesso da coleta.
 
 ### 3. Inicie a API
 
@@ -72,6 +78,20 @@ docker compose up --build
 ```
 
 A API será exposta na porta `8000`.
+
+## Testes
+
+Com o [uv](https://docs.astral.sh/uv/), as dependências de `requirements.txt` são
+instaladas em um ambiente temporário, sem criar `.venv`:
+
+```bash
+PEC_TEST_BROWSER_CHANNEL=chrome uv run --no-project --python 3.11 \
+  --with-requirements requirements.txt python -m unittest discover -s tests
+```
+
+`PEC_TEST_BROWSER_CHANNEL=chrome` usa o Google Chrome instalado. Sem essa
+variável, os testes de navegador usam o Chromium do Playwright
+(`playwright install chromium`). Os testes não acessam a internet nem o banco.
 
 ## Endpoints
 

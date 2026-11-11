@@ -36,6 +36,8 @@ async def daily_job():
     payload = {"status": status, "data": data, "execution_time": now_iso()}
     global LAST_RESULT
     LAST_RESULT = payload
+    if status != "success":
+        raise RuntimeError(data.get("message", "Falha na execução do crawler."))
     async for session in get_session():
         version = data.get("versao_label")
         if status == "success" and is_full_version(version):

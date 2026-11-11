@@ -1,6 +1,6 @@
 import re
 from typing import Optional
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 
 VERSION_PATTERN = re.compile(r"(?<!\d)(\d+\.\d+(?:\.\d+)?)(?!\d)")
@@ -26,6 +26,12 @@ def extract_full_version(text: str) -> Optional[str]:
 def is_full_version(version: str | None) -> bool:
     """Whether *version* has the format required for persistence."""
     return bool(FULL_VERSION_PATTERN.fullmatch(version or ""))
+
+
+def extract_installer_version(url: str) -> Optional[str]:
+    """Return the full version in an installer URL's path or query, not its host."""
+    parts = urlsplit(url or "")
+    return extract_full_version(f"{parts.path}?{parts.query}")
 
 
 def extract_homepage_version(text: str) -> Optional[str]:

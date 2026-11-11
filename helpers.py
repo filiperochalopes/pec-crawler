@@ -1,23 +1,21 @@
 import re
 from playwright.async_api import (
+    Error as PlaywrightError,
+    Locator,
     Page,
-    TimeoutError as PlaywrightTimeoutError,
     async_playwright,
 )
 from datetime import datetime, timezone
 from typing import Tuple, Optional, Dict, Any
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 import asyncio
 import logging
 from openai import AzureOpenAI
 
 from env import settings
 from parsing import (
-    build_release_blog_url,
-    build_release_url,
-    extract_full_version,
     extract_homepage_version,
-    extract_linux_download_url,
+    extract_installer_version,
     extract_version,
     is_full_version,
 )
@@ -60,85 +58,72 @@ async def extract_latest_post_from_blog(
     raise ValueError("Não encontrei a URL do post da versão no Blog.")
 
 
-async def extract_linux_link(page: Page) -> Optional[str]:
-    logger.debug("Searching for Linux download link")
-    button = page.locator(
-        "button", has_text=LINUX_DOWNLOAD_BUTTON
-    ).first
-    if await button.count() == 0:
-        logger.debug("Linux link not found")
-        return None
+async def resolve_control_url(page: Page, control: Locator) -> str:
+    """Read a link or observe a click, without fetching its destination.
 
-    # Prefer declarative markup if the portal adopts a normal link later.
-    anchor_href = await button.evaluate(
-        "element => element.closest('a') ? element.closest('a').href : null"
+    The same operation resolves release pages and installers. Context routing
+    includes the first navigation of a new tab; frame events cover SPA links.
+    No URL templates or framework-specific handler inspection are needed.
+    """
+    href = await control.evaluate(
+        "element => element.closest('a[href]')?.getAttribute('href') || null"
     )
-    link = extract_linux_download_url(anchor_href or "")
-    if link:
-        return link
+    if href and not href.startswith("#"):
+        target = urljoin(page.url, href)
+        if urlsplit(target).scheme in ("http", "https") and target != page.url:
+            return target
 
-    # The current Docusaurus page attaches the URL in a React onClick prop,
-    # rather than exposing it as an href. Wait for hydration, then read the
-    # handler without executing it or starting the very large JAR download.
-    button_handle = await button.element_handle()
-    if button_handle:
-        try:
-            await page.wait_for_function(
-                """element => Object.keys(element).some(
-                    key => key.startsWith('__reactProps$')
-                )""",
-                arg=button_handle,
-                timeout=10_000,
-            )
-        except PlaywrightTimeoutError:
-            logger.debug("React props were not available on the Linux button")
+    destination = asyncio.get_running_loop().create_future()
+    context = page.context
+    original_pages = set(context.pages)
+    original_url = page.url
 
-        handler_source = await button.evaluate(
-            """element => {
-                const key = Object.keys(element).find(
-                    key => key.startsWith('__reactProps$')
-                );
-                const handler = key && element[key] && element[key].onClick;
-                return handler ? handler.toString() : '';
-            }"""
-        )
-        link = extract_linux_download_url(handler_source or "")
-        if link:
-            return link
+    def record(url):
+        if urlsplit(url).scheme in ("http", "https") and not destination.done():
+            destination.set_result(url)
 
-    # The homepage uses a React onClick handler instead of an anchor. Capture the
-    # resulting installer request as a fallback, but abort it: the crawler only
-    # needs its URL and downloading the full JAR wastes time, memory and disk.
-    download_request = asyncio.get_running_loop().create_future()
-    linux_installer_pattern = re.compile(
-        r"Linux[^/?]*\.(?:jar|zip)(?:[?#]|$)", re.IGNORECASE
-    )
+    async def intercept(route):
+        request = route.request
+        is_main_navigation = False
+        if request.is_navigation_request():
+            try:
+                is_main_navigation = request.frame.parent_frame is None
+            except PlaywrightError:
+                # The first request of a popup precedes creation of its frame.
+                is_main_navigation = True
+        if is_main_navigation:
+            # 204 prevents navigation and sends no request to the remote server.
+            await route.fulfill(status=204)
+            record(request.url)
+        else:
+            await route.fallback()
 
-    async def capture_download(route):
-        if not download_request.done():
-            download_request.set_result(route.request.url)
-        await route.abort()
+    def navigated(frame):
+        if frame == page.main_frame and frame.url != original_url:
+            record(frame.url)
 
-    await page.route(linux_installer_pattern, capture_download)
-    click_error = None
+    await context.route("**/*", intercept)
+    page.on("framenavigated", navigated)
     try:
+        await page.wait_for_load_state("load")
+        await control.click(no_wait_after=True)
         try:
-            await button.click(no_wait_after=True)
-        except Exception as exc:
-            # An aborted navigation may surface on the click. Preserve it and
-            # only re-raise when no matching installer request was captured.
-            click_error = exc
-
-        try:
-            return await asyncio.wait_for(download_request, timeout=30)
+            return await asyncio.wait_for(destination, timeout=30)
         except asyncio.TimeoutError as exc:
-            if click_error:
-                raise click_error
-            raise ValueError(
-                "O botão Linux não iniciou uma requisição de download."
-            ) from exc
+            raise ValueError("O controle de download não informou um endereço HTTP(S).") from exc
     finally:
-        await page.unroute(linux_installer_pattern, capture_download)
+        page.remove_listener("framenavigated", navigated)
+        await context.unroute("**/*", intercept)
+        for popup in set(context.pages) - original_pages:
+            await popup.close()
+
+
+async def extract_linux_link(page: Page) -> Optional[str]:
+    logger.debug("Searching for Linux download control")
+    control = page.locator("a, button", has_text=LINUX_DOWNLOAD_BUTTON).first
+    if await control.count() == 0:
+        return None
+    return await resolve_control_url(page, control)
 
 
 async def extract_from_homepage(html: str) -> Optional[str]:
@@ -147,39 +132,21 @@ async def extract_from_homepage(html: str) -> Optional[str]:
 
 
 async def extract_latest_release_from_homepage(
-    page: Page, base_url: str, releases_url: str
-) -> Tuple[str, str]:
-    """Discover the current release post from the homepage.
-
-    SISAPS used to expose platform-specific buttons on this page.  The current
-    site has one generic button which points to a versioned blog post, where the
-    Linux installer control lives.  Keep the version extraction independent of
-    the button label so both layouts work.
-    """
+    page: Page, base_url: str
+) -> Tuple[str, Optional[str]]:
+    """Follow the published download control, regardless of URL layout."""
     logger.debug("Discovering latest release from homepage %s", base_url)
-    await page.goto(base_url, wait_until="domcontentloaded")
+    await page.goto(base_url, wait_until="load")
 
-    button = page.locator(
-        "button", has_text=re.compile(r"Download.*Vers[aã]o", flags=re.IGNORECASE)
+    control = page.locator(
+        "a, button", has_text=re.compile(r"\bDownload\b", flags=re.IGNORECASE)
     ).first
-    if await button.count() == 0:
-        raise ValueError(
-            "Não encontrei o botão de download na página inicial."
-        )
+    if await control.count() == 0:
+        raise ValueError("Não encontrei o controle de download na página inicial.")
 
-    button_text = await button.text_content() or ""
-    advertised_version = extract_homepage_version(button_text)
-    if not advertised_version:
-        advertised_version = extract_homepage_version(await page.content())
-    if not advertised_version:
-        raise ValueError("Não encontrei a versão atual na página inicial.")
-
-    # Since 2026 the versioned blog post is the canonical release page.  The
-    # old documentation URL is retained as a fallback for portals that still
-    # publish only a major/minor version on the homepage.
-    if advertised_version.count(".") >= 2:
-        return build_release_blog_url(base_url, advertised_version), advertised_version
-    return build_release_url(releases_url, advertised_version), advertised_version
+    text = await control.text_content() or ""
+    advertised_version = extract_homepage_version(text)
+    return await resolve_control_url(page, control), advertised_version
 
 
 async def extract_release_page(
@@ -259,24 +226,19 @@ async def run_pec_crawler() -> Tuple[str, Dict[str, Any]]:
                 release_url,
                 advertised_version,
             ) = await extract_latest_release_from_homepage(
-                page, settings.BASE_URL, settings.RELEASES_URL
+                page, settings.BASE_URL
             )
-            (
-                resolved_release_url,
-                release_version,
-                release_html,
-            ) = await extract_release_page(page, release_url)
+            resolved_release_url, release_version, release_html = (
+                await extract_release_page(page, release_url)
+            )
             link_linux = await extract_linux_link(page)
             if not link_linux:
                 raise ValueError("Não encontrei o link de download para Linux.")
-            # The homepage and legacy documentation pages may advertise only a
-            # major/minor family (for example, ``5.5``).  The installer URL
-            # includes the released build and is therefore the reliable
-            # fallback for the value stored in the database.
+            # Prefer the version in the actual installer to a generic heading.
             version_candidates = (
+                extract_installer_version(link_linux),
                 release_version,
                 advertised_version,
-                extract_full_version(link_linux),
             )
             versao_label = next(
                 (version for version in version_candidates if is_full_version(version)),
@@ -286,6 +248,9 @@ async def run_pec_crawler() -> Tuple[str, Dict[str, Any]]:
                 raise ValueError(
                     "Não encontrei uma versão completa (major.minor.patch) para persistir."
                 )
+
+            if advertised_version and versao_label.split(".")[:2] != advertised_version.split(".")[:2]:
+                raise ValueError("A versão do instalador não pertence à família anunciada.")
 
             await browser.close()
 

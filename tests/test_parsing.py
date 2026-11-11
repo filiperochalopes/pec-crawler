@@ -5,6 +5,7 @@ from parsing import (
     build_release_url,
     extract_full_version,
     extract_homepage_version,
+    extract_installer_version,
     extract_linux_download_url,
     extract_version,
     is_full_version,
@@ -34,6 +35,13 @@ class VersionParsingTests(unittest.TestCase):
             "eSUS-AB-PEC-5.5.24-Linux64.jar"
         )
         self.assertEqual(extract_full_version(url), "5.5.24")
+
+    def test_installer_version_ignores_numbers_in_the_host(self):
+        self.assertEqual(
+            extract_installer_version("http://127.0.0.1:8000/PEC/5.6.1/PEC-5.6.1-Linux64.jar"),
+            "5.6.1",
+        )
+        self.assertIsNone(extract_installer_version("http://10.0.0.1/get?platform=linux"))
 
     def test_rejects_major_minor_version_for_persistence(self):
         self.assertFalse(is_full_version("5.5"))
